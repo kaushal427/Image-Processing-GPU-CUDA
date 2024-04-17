@@ -1,132 +1,102 @@
-#include <time.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <math.h>
-#include <cuda_runtime.h>
-#include <cutil.h>
 
+#define MASK_WIDTH 3
+#define MASK_HEIGHT 3
 
-unsigned int width, height;
-int mask[3][3] = {
+__constant__ int mask[MASK_HEIGHT][MASK_WIDTH] = {
     {1, 2, 1},
     {2, 3, 2},
     {1, 2, 1}
 };
 
-
-int getPixel(unsigned char *arr, int col, int row) {
+__device__ int getPixel(unsigned char *arr, int col, int row, int imgWidth) {
     int sum = 0;
     for (int j = -1; j <= 1; j++) {
         for (int i = -1; i <= 1; i++) {
-            int color = arr[(row + j) * width + (col + i)];
+            int color = arr[(row + j) * imgWidth + (col + i)];
             sum += color * mask[i + 1][j + 1];
         }
     }
     return sum / 15;
 }
 
-
-void h_blur(unsigned char *arr, unsigned char *result) {
-    int offset = 2 * width;
-    for (int row = 2; row < height - 3; row++) {
-        for (int col = 2; col < width - 3; col++) {
-            result[offset + col] = getPixel(arr, col, row);
-        }
-        offset += width;
-    }
-}
-
-
 __global__ void d_blur(unsigned char *arr, unsigned char *result,
                        int width, int height) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
 
-
     if (row < 2 || col < 2 || row >= height - 3 || col >= width - 3)
         return;
 
-
-    int mask[3][3] = {
-        {1, 2, 1},
-        {2, 3, 2},
-        {1, 2, 1}
-    };
-
-
-    int sum = 0;
-    for (int j = -1; j <= 1; j++) {
-        for (int i = -1; i <= 1; i++) {
-            int color = arr[(row + j) * width + (col + i)];
-            sum += color * mask[i + 1][j + 1];
-        }
-    }
-    result[row * width + col] = sum / 15;
+    result[row * width + col] = getPixel(arr, col, row, width);
 }
-
 
 int main(int argc, char **argv) {
-    unsigned char *d_resultPixels;
-    unsigned char *h_resultPixels;
-    unsigned char *h_pixels = NULL;
-    unsigned char *d_pixels = NULL;
+    FILE *file;
+    unsigned char *h_pixels, *h_resultPixels;
+    unsigned char *d_pixels, *d_resultPixels;
+    char *srcPath = "image.pgm";
+    char *h_ResultPath = "output_cpu.pgm";
+    char *d_ResultPath = "output_gpu.pgm";
+    unsigned int width, height, imageSize;
 
+    // Load PGM file
+    file = fopen(srcPath, "rb");
+    if (!file) {
+        fprintf(stderr, "Error: Unable to open file %s\n", srcPath);
+        return EXIT_FAILURE;
+    }
+    fscanf(file, "P5\n%d %d\n255\n", &width, &height);
+    imageSize = width * height;
+    h_pixels = (unsigned char *)malloc(imageSize);
+    h_resultPixels = (unsigned char *)malloc(imageSize);
+    fread(h_pixels, sizeof(unsigned char), imageSize, file);
+    fclose(file);
 
-    char *srcPath = "/Developer/GPU Computing/C/src/GaussianBlur/image/wallpaper2.pgm";
-    char *h_ResultPath = "/Developer/GPU Computing/C/src/GaussianBlur/output/h_wallpaper2.pgm";
-    char *d_ResultPath = "/Developer/GPU Computing/C/src/GaussianBlur/output/d_wallpaper2.pgm";
+    // Allocate memory on device
+    cudaMalloc((void **)&d_pixels, imageSize);
+    cudaMalloc((void **)&d_resultPixels, imageSize);
 
+    // Copy input data to device
+    cudaMemcpy(d_pixels, h_pixels, imageSize, cudaMemcpyHostToDevice);
 
-    cutLoadPGMub(srcPath, &h_pixels, &width, &height);
-
-
-    int ImageSize = sizeof(unsigned char) * width * height;
-
-
-    h_resultPixels = (unsigned char *)malloc(ImageSize);
-    cudaMalloc((void **)&d_pixels, ImageSize);
-    cudaMalloc((void **)&d_resultPixels, ImageSize);
-    cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
-
-
-    clock_t starttime, endtime, difference;
-    starttime = clock();
-
-
-    // apply gaussian blur
-    h_blur(h_pixels, h_resultPixels);
-
-
-    endtime = clock();
-    difference = (endtime - starttime);
-    double interval = difference / (double)CLOCKS_PER_SEC;
-    printf("CPU execution time = %f ms\n", interval * 1000);
-    cutSavePGMub(h_ResultPath, h_resultPixels, width, height);
-
-
+    // Define block and grid dimensions
     dim3 block(16, 16);
-    dim3 grid(width / 16, height / 16);
-    unsigned int timer = 0;
-    cutCreateTimer(&timer);
-    cutStartTimer(timer);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 
+    // Start timing
+    clock_t starttime = clock();
 
-    /* CUDA method */
+    // Call kernel
     d_blur<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
 
+    // Synchronize
+    cudaDeviceSynchronize();
 
-    cudaThreadSynchronize();
-    cutStopTimer(timer);
-    printf("CUDA execution time = %f ms\n", cutGetTimerValue(timer));
+    // End timing
+    clock_t endtime = clock();
+    double interval = (double)(endtime - starttime) / CLOCKS_PER_SEC * 1000;
 
+    // Copy result back to host
+    cudaMemcpy(h_resultPixels, d_resultPixels, imageSize, cudaMemcpyDeviceToHost);
 
-    cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
-    cutSavePGMub(d_ResultPath, h_resultPixels, width, height);
+    // Save output image
+    file = fopen(d_ResultPath, "wb");
+    fprintf(file, "P5\n%d %d\n255\n", width, height);
+    fwrite(h_resultPixels, sizeof(unsigned char), imageSize, file);
+    fclose(file);
 
+    printf("CUDA execution time = %f ms\n", interval);
 
-    printf("Press enter to exit ...\n");
-    getchar();
+    // Free memory
+    free(h_pixels);
+    free(h_resultPixels);
+    cudaFree(d_pixels);
+    cudaFree(d_resultPixels);
+
+    return EXIT_SUCCESS;
 }
-
-
