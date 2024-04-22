@@ -58,7 +58,7 @@ void savePGMub(const char *filename, unsigned char *pixels, unsigned int width, 
     fclose(file);
 }
 
-void h_blur(unsigned char *arr, unsigned char *result) {
+void h_blur(unsigned char *arr, unsigned char *result, int width, int height) {
     int offset = 1 * width;
     for (int row = 1; row < height - 1; row++) {
         for (int col = 1; col < width - 1; col++) {
@@ -74,8 +74,7 @@ void h_blur(unsigned char *arr, unsigned char *result) {
     }
 }
 
-__global__ void d_blur(unsigned char *arr, unsigned char *result,
-                       int width, int height) {
+__global__ void d_blur(unsigned char *arr, unsigned char *result, int width, int height) {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -97,10 +96,11 @@ int main(int argc, char **argv) {
     unsigned char *h_resultPixels;
     unsigned char *h_pixels = NULL;
     unsigned char *d_pixels = NULL;
+    unsigned int width, height;
 
     char *srcPath = "sample_640426.pgm";
-    char *h_ResultPath = "h_sample_640426.pgm";
-    char *d_ResultPath = "d_sample_640426.pgm";
+    char *h_ResultPath = "h_sample_640426_mean.pgm";
+    char *d_ResultPath = "d_sample_640426_mean.pgm";
 
     loadPGMub(srcPath, &h_pixels, &width, &height);
 
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
     starttime = clock();
 
     // Apply mean blur on CPU
-    h_blur(h_pixels, h_resultPixels);
+    h_blur(h_pixels, h_resultPixels, width, height);
 
     endtime = clock();
     difference = (endtime - starttime);

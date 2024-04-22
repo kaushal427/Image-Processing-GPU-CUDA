@@ -112,8 +112,8 @@ int main(int argc, char **argv) {
     unsigned int width, height;
 
     char *srcPath = "sample_640426.pgm";
-    char *h_ResultPath = "h_sample_640426.pgm";
-    char *d_ResultPath = "d_sample_640426.pgm";
+    char *h_ResultPath = "h_sample_640426_sobel.pgm";
+    char *d_ResultPath = "d_sample_640426_sobel.pgm";
 
     // Load the input image and get dimensions
     loadPGMub(srcPath, &h_pixels, &width, &height);

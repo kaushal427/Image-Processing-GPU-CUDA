@@ -117,8 +117,8 @@ int main(int argc, char **argv) {
     unsigned char *d_pixels = NULL;
 
     char *srcPath = "sample_640426.pgm";
-    char *h_ResultPath = "h_sample_640426.pgm";
-    char *d_ResultPath = "d_sample_640426.pgm";
+    char *h_ResultPath = "h_sample_640426_gaussian.pgm";
+    char *d_ResultPath = "d_sample_640426_gaussian.pgm";
 
     loadPGMub(srcPath, &h_pixels, &width, &height);
 
