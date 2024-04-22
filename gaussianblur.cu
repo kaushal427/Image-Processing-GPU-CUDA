@@ -147,6 +147,13 @@ int main(int argc, char **argv) {
     // cutCreateTimer(&timer); // Removed cutCreateTimer
     // cutStartTimer(timer); // Removed cutStartTimer
 
+    // Prepare to time the GPU processing
+    float gpu_time;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
     // CUDA method
     d_blur<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
     cudaDeviceSynchronize(); // Synchronize after kernel launch
@@ -154,8 +161,20 @@ int main(int argc, char **argv) {
     // cutStopTimer(timer); // Removed cutStopTimer
     // printf("CUDA execution time = %f ms\n", cutGetTimerValue(timer)); // Removed cutGetTimerValue
 
+    // Stop timing after synchronization
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_time, start, stop);
+    printf("GPU execution time = %f ms\n", gpu_time);
+
     cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
     savePGMub(d_ResultPath, h_resultPixels, width, height);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaFree(d_pixels);
+    cudaFree(d_resultPixels);
+    free(h_pixels);
+    free(h_resultPixels);
 
     printf("Press enter to exit ...\n");
     getchar();

@@ -144,15 +144,35 @@ int main(int argc, char **argv) {
     dim3 block(16, 16);
     dim3 grid(width/16, height/16);
 
+    // Prepare to time the GPU processing
+    float gpu_time;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
     // Perform the edge detection on the device (GPU)
     d_EdgeDetect<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
     cudaDeviceSynchronize();
+
+    // Stop timing after synchronization
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_time, start, stop);
+    printf("GPU execution time = %f ms\n", gpu_time);
+
 
     // Copy the result from device to host
     cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
 
     // Save the result of the device processing
     savePGMub(d_ResultPath, h_resultPixels, width, height);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaFree(d_pixels);
+    cudaFree(d_resultPixels);
+    free(h_pixels);
+    free(h_resultPixels);
 
     // Prompt to exit
     printf("Press enter to exit...\n");
