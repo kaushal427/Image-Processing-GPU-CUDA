@@ -74,6 +74,24 @@ void h_blur(unsigned char *arr, unsigned char *result) {
     }
 }
 
+__global__ void d_blur(unsigned char *arr, unsigned char *result,
+                       int width, int height) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (row < 1 || col < 1 || row >= height - 1 || col >= width - 1)
+        return;
+
+    int sum = 0;
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            int color = arr[(row + j) * width + (col + i)];
+            sum += color;
+        }
+    }
+    result[row * width + col] = sum / 9;
+}
+
 int main(int argc, char **argv) {
     unsigned char *d_resultPixels;
     unsigned char *h_resultPixels;
