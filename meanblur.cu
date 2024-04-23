@@ -98,66 +98,76 @@ int main(int argc, char **argv) {
     unsigned char *d_pixels = NULL;
     unsigned int width, height;
 
-    char *srcPath = "sample_640426.pgm";
-    char *h_ResultPath = "h_sample_640426_mean.pgm";
-    char *d_ResultPath = "d_sample_640426_mean.pgm";
+    // Define array of image paths
+    const char* imagePaths[] = {"mountains.pgm", "nature.pgm", "tower.pgm"};
+    int numImages = sizeof(imagePaths) / sizeof(char*);
 
-    loadPGMub(srcPath, &h_pixels, &width, &height);
+    // Loop through each image
+    for (int imgIndex = 0; imgIndex < numImages; imgIndex++) {
+        char srcPath[100];
+        char h_ResultPath[120];
+        char d_ResultPath[120];
 
-    int ImageSize = sizeof(unsigned char) * width * height;
+        // Construct file paths for input and output
+        sprintf(srcPath, "%s", imagePaths[imgIndex]);
+        sprintf(h_ResultPath, "h_%s_meanblur.pgm", srcPath);
+        sprintf(d_ResultPath, "d_%s_meanblur.pgm", srcPath);
 
-    h_resultPixels = (unsigned char *)malloc(ImageSize);
-    cudaMalloc((void **)&d_pixels, ImageSize);
-    cudaMalloc((void **)&d_resultPixels, ImageSize);
-    cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
+        // Load the input image and get dimensions
+        loadPGMub(srcPath, &h_pixels, &width, &height);
 
-    clock_t starttime, endtime, difference;
-    starttime = clock();
+        int ImageSize = sizeof(unsigned char) * width * height;
 
-    // Apply mean blur on CPU
-    h_blur(h_pixels, h_resultPixels, width, height);
+        // Allocate memory for results on host and device
+        h_resultPixels = (unsigned char *)malloc(ImageSize);
+        cudaMalloc((void **)&d_pixels, ImageSize);
+        cudaMalloc((void **)&d_resultPixels, ImageSize);
+        cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
 
-    endtime = clock();
-    difference = (endtime - starttime);
-    double interval = difference / (double)CLOCKS_PER_SEC;
-    printf("CPU execution time = %f ms\n", interval * 1000);
-    savePGMub(h_ResultPath, h_resultPixels, width, height);
+        // Timing CPU processing
+        clock_t starttime = clock();
+        h_blur(h_pixels, h_resultPixels, width, height);
+        clock_t endtime = clock();
+        double interval = (endtime - starttime) / (double)CLOCKS_PER_SEC;
+        printf("CPU execution time = %f ms for %s\n", interval * 1000, srcPath);
+        savePGMub(h_ResultPath, h_resultPixels, width, height);
 
-    dim3 block(16, 16);
-    dim3 grid(width / 16, height / 16);
-    unsigned int timer = 0;
-    // cutCreateTimer(&timer); // Removed cutCreateTimer
-    // cutStartTimer(timer); // Removed cutStartTimer
+        // Define block and grid size for CUDA
+        dim3 block(16, 16);
+        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 
-    // Prepare to time the GPU processing
-    float gpu_time;
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
+        // Prepare to time GPU processing
+        float gpu_time;
+        cudaEvent_t start, stop;
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start);
 
-    // CUDA method
-    d_blur<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
-    cudaDeviceSynchronize(); // Synchronize after kernel launch
+        // Perform blur on GPU
+        d_blur<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
+        cudaDeviceSynchronize();
 
-    // Stop timing after synchronization
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&gpu_time, start, stop);
-    printf("GPU execution time = %f ms\n", gpu_time);
+        // Stop timing after synchronization
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&gpu_time, start, stop);
+        printf("GPU execution time = %f ms for %s\n", gpu_time, srcPath);
 
-    // cutStopTimer(timer); // Removed cutStopTimer
-    // printf("CUDA execution time = %f ms\n", cutGetTimerValue(timer)); // Removed cutGetTimerValue
+        cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
+        savePGMub(d_ResultPath, h_resultPixels, width, height);
 
-    cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
-    savePGMub(d_ResultPath, h_resultPixels, width, height);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_pixels);
-    cudaFree(d_resultPixels);
-    free(h_pixels);
-    free(h_resultPixels);
+        // Clean up
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        cudaFree(d_pixels);
+        cudaFree(d_resultPixels);
+        free(h_pixels);
+        free(h_resultPixels);
+    }
 
+    // Prompt to exit
     printf("Press enter to exit ...\n");
     getchar();
+
+    return 0;
 }

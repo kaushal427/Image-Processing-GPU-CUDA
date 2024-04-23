@@ -111,68 +111,79 @@ int main(int argc, char **argv) {
     unsigned char *d_pixels = NULL;
     unsigned int width, height;
 
-    char *srcPath = "sample_640426.pgm";
-    char *h_ResultPath = "h_sample_640426_sobel.pgm";
-    char *d_ResultPath = "d_sample_640426_sobel.pgm";
+    // Define array of image paths
+    const char* imagePaths[] = {"mountains.pgm", "nature.pgm", "tower.pgm"};
+    int numImages = sizeof(imagePaths) / sizeof(char*);
 
-    // Load the input image and get dimensions
-    loadPGMub(srcPath, &h_pixels, &width, &height);
+    // Process each image
+    for (int imgIndex = 0; imgIndex < numImages; imgIndex++) {
+        char srcPath[100];
+        char h_ResultPath[120];
+        char d_ResultPath[120];
 
-    int ImageSize = sizeof(unsigned char) * width * height;
+        // Construct file paths for input and output
+        sprintf(srcPath, "%s", imagePaths[imgIndex]);
+        sprintf(h_ResultPath, "h_%s_sobel.pgm", srcPath);
+        sprintf(d_ResultPath, "d_%s_sobel.pgm", srcPath);
 
-    // Allocate memory for the results on host and device
-    h_resultPixels = (unsigned char *)malloc(ImageSize);
-    cudaMalloc((void **)&d_pixels, ImageSize);
-    cudaMalloc((void **)&d_resultPixels, ImageSize);
+        // Load the input image and get dimensions
+        loadPGMub(srcPath, &h_pixels, &width, &height);
 
-    // Copy image data from host to device
-    cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
+        int ImageSize = sizeof(unsigned char) * width * height;
 
-    // Start timing the host (CPU) processing
-    clock_t starttime = clock();
-    h_EdgeDetect(h_pixels, h_resultPixels, width, height);
-    clock_t endtime = clock();
+        // Allocate memory for the results on host and device
+        h_resultPixels = (unsigned char *)malloc(ImageSize);
+        cudaMalloc((void **)&d_pixels, ImageSize);
+        cudaMalloc((void **)&d_resultPixels, ImageSize);
 
-    // Calculate the execution time for host processing
-    double interval = (endtime - starttime) / (double)CLOCKS_PER_SEC;
-    printf("CPU execution time = %f ms\n", interval * 1000);
+        // Copy image data from host to device
+        cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
 
-    // Save the result of the host processing
-    savePGMub(h_ResultPath, h_resultPixels, width, height);
+        // Start timing the host (CPU) processing
+        clock_t starttime = clock();
+        h_EdgeDetect(h_pixels, h_resultPixels, width, height);
+        clock_t endtime = clock();
 
-    // Define block size and grid size for CUDA
-    dim3 block(16, 16);
-    dim3 grid(width/16, height/16);
+        // Calculate the execution time for host processing
+        double interval = (endtime - starttime) / (double)CLOCKS_PER_SEC;
+        printf("CPU execution time = %f ms for %s\n", interval * 1000, srcPath);
 
-    // Prepare to time the GPU processing
-    float gpu_time;
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
+        // Save the result of the host processing
+        savePGMub(h_ResultPath, h_resultPixels, width, height);
 
-    // Perform the edge detection on the device (GPU)
-    d_EdgeDetect<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
-    cudaDeviceSynchronize();
+        // Define block size and grid size for CUDA
+        dim3 block(16, 16);
+        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 
-    // Stop timing after synchronization
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&gpu_time, start, stop);
-    printf("GPU execution time = %f ms\n", gpu_time);
+        // Prepare to time the GPU processing
+        float gpu_time;
+        cudaEvent_t start, stop;
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start);
 
+        // Perform the edge detection on the device (GPU)
+        d_EdgeDetect<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
+        cudaDeviceSynchronize();
 
-    // Copy the result from device to host
-    cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
+        // Stop timing after synchronization
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&gpu_time, start, stop);
+        printf("GPU execution time = %f ms for %s\n", gpu_time, srcPath);
 
-    // Save the result of the device processing
-    savePGMub(d_ResultPath, h_resultPixels, width, height);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_pixels);
-    cudaFree(d_resultPixels);
-    free(h_pixels);
-    free(h_resultPixels);
+        // Copy the result from device to host
+        cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
+
+        // Save the result of the device processing
+        savePGMub(d_ResultPath, h_resultPixels, width, height);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        cudaFree(d_pixels);
+        cudaFree(d_resultPixels);
+        free(h_pixels);
+        free(h_resultPixels);
+    }
 
     // Prompt to exit
     printf("Press enter to exit...\n");

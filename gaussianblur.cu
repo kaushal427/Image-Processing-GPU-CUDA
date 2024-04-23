@@ -2,10 +2,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 #include <cuda_runtime.h>
 
-// Function to load a PGM file
 void loadPGMub(const char *filename, unsigned char **pixels, unsigned int *width, unsigned int *height) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
@@ -13,7 +11,6 @@ void loadPGMub(const char *filename, unsigned char **pixels, unsigned int *width
         exit(1);
     }
 
-    // Read PGM header
     char magic[3];
     fscanf(file, "%s", magic);
     if (strcmp(magic, "P5") != 0) {
@@ -22,12 +19,10 @@ void loadPGMub(const char *filename, unsigned char **pixels, unsigned int *width
         exit(1);
     }
 
-    fscanf(file, "%u", width);
-    fscanf(file, "%u", height);
+    fscanf(file, "%u %u", width, height);
     unsigned int max_val;
     fscanf(file, "%u%*c", &max_val);
 
-    // Allocate memory for image pixels
     *pixels = (unsigned char *)malloc((*width) * (*height) * sizeof(unsigned char));
     if (!*pixels) {
         fprintf(stderr, "Error: Unable to allocate memory\n");
@@ -35,12 +30,10 @@ void loadPGMub(const char *filename, unsigned char **pixels, unsigned int *width
         exit(1);
     }
 
-    // Read pixel data
     fread(*pixels, sizeof(unsigned char), (*width) * (*height), file);
     fclose(file);
 }
 
-// Function to save a PGM file
 void savePGMub(const char *filename, unsigned char *pixels, unsigned int width, unsigned int height) {
     FILE *file = fopen(filename, "wb");
     if (!file) {
@@ -48,66 +41,78 @@ void savePGMub(const char *filename, unsigned char *pixels, unsigned int width, 
         exit(1);
     }
 
-    // Write PGM header
     fprintf(file, "P5\n");
     fprintf(file, "%u %u\n", width, height);
     fprintf(file, "255\n");
-
-    // Write pixel data
     fwrite(pixels, sizeof(unsigned char), width * height, file);
     fclose(file);
 }
 
-unsigned int width, height;
-int mask[3][3] = {
-    {1, 2, 1},
-    {2, 3, 2},
-    {1, 2, 1}
-};
-
-int getPixel(unsigned char *arr, int col, int row) {
-    int sum = 0;
-    for (int j = -1; j <= 1; j++) {
-        for (int i = -1; i <= 1; i++) {
-            int color = arr[(row + j) * width + (col + i)];
-            sum += color * mask[i + 1][j + 1];
-        }
-    }
-    return sum / 15;
-}
-
-void h_blur(unsigned char *arr, unsigned char *result) {
-    int offset = 2 * width;
-    for (int row = 2; row < height - 3; row++) {
-        for (int col = 2; col < width - 3; col++) {
-            result[offset + col] = getPixel(arr, col, row);
-        }
-        offset += width;
-    }
-}
-
-__global__ void d_blur(unsigned char *arr, unsigned char *result,
-                       int width, int height) {
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (row < 2 || col < 2 || row >= height - 3 || col >= width - 3)
-        return;
-
-    int mask[3][3] = {
-        {1, 2, 1},
-        {2, 3, 2},
-        {1, 2, 1}
+// Compute the Gaussian blur of a pixel
+int getPixel(unsigned char *arr, int col, int row, int width, int height) {
+    int mask[7][7] = {
+        {1, 1, 2, 2, 2, 1, 1},
+        {1, 2, 2, 4, 2, 2, 1},
+        {2, 2, 4, 8, 4, 2, 2},
+        {2, 4, 8, 16, 8, 4, 2},
+        {2, 2, 4, 8, 4, 2, 2},
+        {1, 2, 2, 4, 2, 2, 1},
+        {1, 1, 2, 2, 2, 1, 1}
     };
 
-    int sum = 0;
-    for (int j = -1; j <= 1; j++) {
-        for (int i = -1; i <= 1; i++) {
-            int color = arr[(row + j) * width + (col + i)];
-            sum += color * mask[i + 1][j + 1];
+    int sum = 0, count = 0;
+    for (int j = -3; j <= 3; j++) {
+        for (int i = -3; i <= 3; i++) {
+            int newY = row + j;
+            int newX = col + i;
+            if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
+                sum += arr[newY * width + newX] * mask[i + 3][j + 3];
+                count += mask[i + 3][j + 3];
+            }
         }
     }
-    result[row * width + col] = sum / 15;
+    return sum / count;
+}
+
+// Apply Gaussian blur on the whole image
+void h_blur(unsigned char *arr, unsigned char *result, int width, int height) {
+    for (int row = 0; row < height; row++) {
+        for (int col = 0; col < width; col++) {
+            result[row * width + col] = getPixel(arr, col, row, width, height);
+        }
+    }
+}
+
+__global__ void d_blur(unsigned char *arr, unsigned char *result, int width, int height) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (col >= width || row >= height)
+        return;
+
+    int mask[7][7] = {
+        {1, 1, 2, 2, 2, 1, 1},
+        {1, 2, 2, 4, 2, 2, 1},
+        {2, 2, 4, 8, 4, 2, 2},
+        {2, 4, 8, 16, 8, 4, 2},
+        {2, 2, 4, 8, 4, 2, 2},
+        {1, 2, 2, 4, 2, 2, 1},
+        {1, 1, 2, 2, 2, 1, 1}
+    };
+
+
+
+    int sum = 0, count = 0;
+    for (int j = -3; j <= 3; j++) {
+        for (int i = -3; i <= 3; i++) {
+            int newY = row + j;
+            int newX = col + i;
+            if (newX >= 0 && newX < width && newY >= 0 && newY < height) {
+                sum += arr[newY * width + newX] * mask[i + 3][j + 3];
+                count += mask[i + 3][j + 3];
+            }
+        }
+    }
+    result[row * width + col] = sum / count;
 }
 
 int main(int argc, char **argv) {
@@ -115,67 +120,66 @@ int main(int argc, char **argv) {
     unsigned char *h_resultPixels;
     unsigned char *h_pixels = NULL;
     unsigned char *d_pixels = NULL;
+    unsigned int width, height;
 
-    char *srcPath = "sample_640426.pgm";
-    char *h_ResultPath = "h_sample_640426_gaussian.pgm";
-    char *d_ResultPath = "d_sample_640426_gaussian.pgm";
+    const char* imagePaths[] = {"mountains.pgm", "nature.pgm", "tower.pgm"};
+    int numImages = sizeof(imagePaths) / sizeof(char*);
 
-    loadPGMub(srcPath, &h_pixels, &width, &height);
+    for (int imgIndex = 0; imgIndex < numImages; imgIndex++) {
+        char srcPath[100];
+        char h_ResultPath[120];
+        char d_ResultPath[120];
 
-    int ImageSize = sizeof(unsigned char) * width * height;
+        sprintf(srcPath, "%s", imagePaths[imgIndex]);
+        sprintf(h_ResultPath, "h_%s_gaussian.pgm", srcPath);
+        sprintf(d_ResultPath, "d_%s_gaussian.pgm", srcPath);
 
-    h_resultPixels = (unsigned char *)malloc(ImageSize);
-    cudaMalloc((void **)&d_pixels, ImageSize);
-    cudaMalloc((void **)&d_resultPixels, ImageSize);
-    cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
+        loadPGMub(srcPath, &h_pixels, &width, &height);
 
-    clock_t starttime, endtime, difference;
-    starttime = clock();
+        int ImageSize = sizeof(unsigned char) * width * height;
 
-    // Apply Gaussian blur on CPU
-    h_blur(h_pixels, h_resultPixels);
+        h_resultPixels = (unsigned char *)malloc(ImageSize);
+        cudaMalloc((void **)&d_pixels, ImageSize);
+        cudaMalloc((void **)&d_resultPixels, ImageSize);
+        cudaMemcpy(d_pixels, h_pixels, ImageSize, cudaMemcpyHostToDevice);
 
-    endtime = clock();
-    difference = (endtime - starttime);
-    double interval = difference / (double)CLOCKS_PER_SEC;
-    printf("CPU execution time = %f ms\n", interval * 1000);
-    savePGMub(h_ResultPath, h_resultPixels, width, height);
+        clock_t starttime = clock();
+        h_blur(h_pixels, h_resultPixels, width, height);
+        clock_t endtime = clock();
+        double interval = (endtime - starttime) / (double)CLOCKS_PER_SEC;
+        printf("CPU execution time = %f ms for %s\n", interval * 1000, srcPath);
+        savePGMub(h_ResultPath, h_resultPixels, width, height);
 
-    dim3 block(16, 16);
-    dim3 grid(width / 16, height / 16);
-    unsigned int timer = 0;
-    // cutCreateTimer(&timer); // Removed cutCreateTimer
-    // cutStartTimer(timer); // Removed cutStartTimer
+        dim3 block(16, 16);
+        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 
-    // Prepare to time the GPU processing
-    float gpu_time;
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
+        float gpu_time;
+        cudaEvent_t start, stop;
+        cudaEventCreate(&start);
+        cudaEventCreate(&stop);
+        cudaEventRecord(start);
 
-    // CUDA method
-    d_blur<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
-    cudaDeviceSynchronize(); // Synchronize after kernel launch
+        d_blur<<<grid, block>>>(d_pixels, d_resultPixels, width, height);
+        cudaDeviceSynchronize();
 
-    // cutStopTimer(timer); // Removed cutStopTimer
-    // printf("CUDA execution time = %f ms\n", cutGetTimerValue(timer)); // Removed cutGetTimerValue
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&gpu_time, start, stop);
+        printf("GPU execution time = %f ms for %s\n", gpu_time, srcPath);
 
-    // Stop timing after synchronization
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&gpu_time, start, stop);
-    printf("GPU execution time = %f ms\n", gpu_time);
+        cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
+        savePGMub(d_ResultPath, h_resultPixels, width, height);
 
-    cudaMemcpy(h_resultPixels, d_resultPixels, ImageSize, cudaMemcpyDeviceToHost);
-    savePGMub(d_ResultPath, h_resultPixels, width, height);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_pixels);
-    cudaFree(d_resultPixels);
-    free(h_pixels);
-    free(h_resultPixels);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        cudaFree(d_pixels);
+        cudaFree(d_resultPixels);
+        free(h_pixels);
+        free(h_resultPixels);
+    }
 
     printf("Press enter to exit ...\n");
     getchar();
+
+    return 0;
 }
